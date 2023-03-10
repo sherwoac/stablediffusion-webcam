@@ -11,7 +11,7 @@ from tqdm import tqdm, trange
 from itertools import islice
 from einops import rearrange, repeat
 from torchvision.utils import make_grid
-from torch import autocast
+# from torch import autocast
 from contextlib import nullcontext
 from pytorch_lightning import seed_everything
 from imwatermark import WatermarkEncoder
@@ -192,6 +192,7 @@ def main():
     seed_everything(opt.seed)
 
     config = OmegaConf.load(f"{opt.config}")
+    assert os.path.isfile(opt.ckpt), f"not found: {opt.ckpt}"
     model = load_model_from_config(config, f"{opt.ckpt}")
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")

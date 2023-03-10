@@ -9,7 +9,7 @@ from itertools import islice
 from einops import rearrange
 from torchvision.utils import make_grid
 from pytorch_lightning import seed_everything
-from torch import autocast
+# from torch import autocast
 from contextlib import nullcontext
 from imwatermark import WatermarkEncoder
 
