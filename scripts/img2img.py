@@ -13,10 +13,7 @@ from torchvision.utils import make_grid
 from torch import autocast
 from contextlib import nullcontext
 from pytorch_lightning import seed_everything
-from imwatermark import WatermarkEncoder
 
-
-from scripts.txt2img import put_watermark
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
@@ -53,7 +50,7 @@ def load_img(path):
     w, h = map(lambda x: x - x % 64, (w, h))  # resize to integer multiple of 64
     image = image.resize((w, h), resample=PIL.Image.LANCZOS)
     image = np.array(image).astype(np.float32) / 255.0
-    image = image[None].transpose(0, 3, 1, 2)
+    image = image[None].transpose(0, 3, 1, 2) # h, w, c -> 0, c, h, w
     image = torch.from_numpy(image)
     return 2. * image - 1.
 
@@ -195,11 +192,6 @@ def main():
     os.makedirs(opt.outdir, exist_ok=True)
     outpath = opt.outdir
 
-    print("Creating invisible watermark encoder (see https://github.com/ShieldMnt/invisible-watermark)...")
-    wm = "SDV2"
-    wm_encoder = WatermarkEncoder()
-    wm_encoder.set_watermark('bytes', wm.encode('utf-8'))
-
     batch_size = opt.n_samples
     n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
     if not opt.from_file:
@@ -221,7 +213,9 @@ def main():
     assert os.path.isfile(opt.init_img)
     init_image = load_img(opt.init_img).to(device)
     init_image = repeat(init_image, '1 ... -> b ...', b=batch_size)
-    init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image))  # move to latent space
+    init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image))
+    latent_noise = torch.randn_like(init_latent)
+      # move to latent space
 
     sampler.make_schedule(ddim_num_steps=opt.ddim_steps, ddim_eta=opt.ddim_eta, verbose=False)
 
@@ -234,31 +228,31 @@ def main():
         with precision_scope("cuda"):
             with model.ema_scope():
                 all_samples = list()
+                uc = None
+                if opt.scale != 1.0:
+                    uc = model.get_learned_conditioning(batch_size * [""])
+                prompts = data[0] # next(tqdm(data, desc="data"))
+                if isinstance(prompts, tuple):
+                    prompts = list(prompts)
+                c = model.get_learned_conditioning(prompts)
                 for n in trange(opt.n_iter, desc="Sampling"):
-                    for prompts in tqdm(data, desc="data"):
-                        uc = None
-                        if opt.scale != 1.0:
-                            uc = model.get_learned_conditioning(batch_size * [""])
-                        if isinstance(prompts, tuple):
-                            prompts = list(prompts)
-                        c = model.get_learned_conditioning(prompts)
+                    # for prompts in :
 
-                        # encode (scaled latent)
-                        z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc] * batch_size).to(device))
-                        # decode it
-                        samples = sampler.decode(z_enc, c, t_enc, unconditional_guidance_scale=opt.scale,
-                                                 unconditional_conditioning=uc, )
+                    # encode (scaled latent)
+                    z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc] * batch_size).to(device), noise=latent_noise)
+                    # decode it
+                    samples = sampler.decode(z_enc, c, t_enc, unconditional_guidance_scale=opt.scale,
+                                                unconditional_conditioning=uc, repeat_noise=True)
 
-                        x_samples = model.decode_first_stage(samples)
-                        x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
+                    x_samples = model.decode_first_stage(samples)
+                    x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
 
-                        for x_sample in x_samples:
-                            x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                            img = Image.fromarray(x_sample.astype(np.uint8))
-                            img = put_watermark(img, wm_encoder)
-                            img.save(os.path.join(sample_path, f"{base_count:05}.png"))
-                            base_count += 1
-                        all_samples.append(x_samples)
+                    for x_sample in x_samples:
+                        x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                        img = Image.fromarray(x_sample.astype(np.uint8))
+                        img.save(os.path.join(sample_path, f"{base_count:05}.png"))
+                        base_count += 1
+                    all_samples.append(x_samples)
 
                 # additionally, save as grid
                 grid = torch.stack(all_samples, 0)
@@ -268,7 +262,6 @@ def main():
                 # to image
                 grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                 grid = Image.fromarray(grid.astype(np.uint8))
-                grid = put_watermark(grid, wm_encoder)
                 grid.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
                 grid_count += 1
 
