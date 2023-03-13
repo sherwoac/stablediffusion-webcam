@@ -1,4 +1,12 @@
 # Stable Diffusion Version 2
+## Additions
+- webcam2img.py - uses v4l2 in linux usage, eg:
+```
+PYTHONPATH=./ python ./scripts/webcam2img.py --ckpt ./models/ldm/stable-diffusion-v1/model.ckpt --precision autocast --prompt \"dog\ cat\ otter\ land\" --strength 0.5 --config ./stablediffusion/configs/stable-diffusion/v2-inference.yaml --ddim_steps 10 
+```
+- vid2vid attempted recreation of [Hopps](https://www.youtube.com/watch?v=pkEQAKmDMa8) and [corridor crew](https://www.youtube.com/watch?v=_9LX9HSQkWo)
+
+## Original
 ![t2i](assets/stable-samples/txt2img/768/merged-0006.png)
 ![t2i](assets/stable-samples/txt2img/768/merged-0002.png)
 ![t2i](assets/stable-samples/txt2img/768/merged-0005.png)
