@@ -18,7 +18,7 @@ from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
 import moviepy.editor
-
+import find_noise
 
 def chunk(it, size):
     it = iter(it)
@@ -206,10 +206,9 @@ def get_arg_parser():
     parser.add_argument(
         "--skip_frame",
         type=int,
-        default=38*30,
-        help="the seed (for reproducible sampling)",
+        default=59*30,
+        help="skip n frames",
     )
-
 
     parser.add_argument(
         "--random_each_frame",
@@ -283,16 +282,15 @@ def main():
 
                     c = model.get_learned_conditioning(prompt_data)
 
-                    init_image = convert_frame_image(video_frame).to(device)
+                    init_image = convert_frame_image(video_frame).to(device).half()
                     init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image)) 
 
                     if opt.random_each_frame:
                         latent_noise = torch.randn_like(init_latent)
 
                     if opt.generate_random_from_image:
-                        sum_colour = init_image.permute(0, 2, 3, 1).sum(dim=3).unsqueeze(dim=-1).repeat_interleave(3, dim=3).permute(0, 3, 1, 2)
-                        sum_colour = (sum_colour - sum_colour.mean()) / sum_colour.std()
-                        latent_noise = model.get_first_stage_encoding(model.encode_first_stage(sum_colour)) 
+                        latent_noise = find_noise.find_noise_for_image(model, init_image, prompt_data, steps=3, cond_scale=1.0, convert_image=False)
+                        # latent_noise = (latent_noise - latent_noise.mean()) / latent_noise.std()
 
                     # encode (scaled latent)
                     z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc]).to(device), noise=latent_noise)
