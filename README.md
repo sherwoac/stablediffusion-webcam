@@ -4,6 +4,7 @@
 ```
 PYTHONPATH=./ python ./scripts/webcam2img.py --ckpt ./models/ldm/stable-diffusion-v1/model.ckpt --precision autocast --prompt \"dog\ cat\ otter\ land\" --strength 0.5 --config ./stablediffusion/configs/stable-diffusion/v2-inference.yaml --ddim_steps 10 
 ```
+eg. ![auth](assets/webcam.png)
 - vid2vid attempted recreation of [Hopps](https://www.youtube.com/watch?v=pkEQAKmDMa8) and [corridor crew](https://www.youtube.com/watch?v=_9LX9HSQkWo)
 
 ## Original
