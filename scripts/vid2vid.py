@@ -51,10 +51,11 @@ def load_img(path):
     return convert_frame_image(image=image)
 
 
-def resize_image(image: np.ndarray) -> np.ndarray:
+def resize_image(image: np.ndarray, to_width=None, to_height=None) -> np.ndarray:
     h, w, c = image.shape
-    w, h = map(lambda x: x - x % 64, (w, h))  # resize to integer multiple of 64
-    pil_image = Image.fromarray(image).resize((w, h), resample=PIL.Image.LANCZOS)
+    if not (to_width and to_height):
+        to_width, to_height = map(lambda x: x - x % 64, (w, h))  # resize to integer multiple of 64
+    pil_image = Image.fromarray(image).resize((to_width, to_height), resample=PIL.Image.LANCZOS)
     return np.array(pil_image)
 
 
@@ -71,9 +72,13 @@ def load_vid(path: str) -> moviepy.editor.VideoFileClip:
 
 
 def tensor_to_image(image_tensor: torch.Tensor) -> PIL.Image:
+    return Image.fromarray(tensor_to_numpy_image(image_tensor=image_tensor))
+
+
+def tensor_to_numpy_image(image_tensor: torch.Tensor) -> np.ndarray:
     image_tensor = torch.clamp((image_tensor + 1.0) / 2.0, min=0.0, max=1.0)
     int_image_tensor = (255. * image_tensor.permute(0, 2, 3, 1)).to(torch.uint8)
-    return Image.fromarray(int_image_tensor[0].cpu().numpy())
+    return int_image_tensor[0].cpu().numpy()
 
 
 def save_image_tensor(image_tensor: torch.Tensor, path: str, count: int):
@@ -224,6 +229,21 @@ def get_arg_parser():
         help="like corridor crew: https://youtu.be/_9LX9HSQkWo?t=215 "
     )
 
+    parser.add_argument(
+        "--start_time",
+        type=float,
+        default=3246.,
+        help="start_time in s",
+    )
+# https://youtu.be/w4zS2upKn04?t=3246
+# https://youtu.be/w4zS2upKn04?t=3259
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=13.,
+        help="duration in s",
+    )
+
     return parser
 
 
@@ -251,6 +271,10 @@ def main():
 
     assert os.path.isfile(opt.inputvid), f'file not found at: {opt.inputvid=}'
     vid = load_vid(opt.inputvid)
+    if opt.start_time and opt.duration:
+        print(vid.duration)
+        vid = vid.subclip(opt.start_time, opt.start_time + opt.duration)
+        print(vid.duration)
  
     sampler.make_schedule(ddim_num_steps=opt.ddim_steps, ddim_eta=opt.ddim_eta, verbose=False)
 
@@ -261,53 +285,53 @@ def main():
     precision_scope = autocast if opt.precision == "autocast" else nullcontext
     
     # fixed noise
-    init_frame = vid.make_frame(0.)
-    init_image = convert_frame_image(init_frame).to(device)
-    init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image))
-    latent_noise = torch.randn_like(init_latent)
+    # init_frame = vid.make_frame(0.)
+    # init_image = convert_frame_image(init_frame).to(device)
+    # init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image))
+    # latent_noise = torch.randn_like(init_latent)
 
     with torch.no_grad():
         with precision_scope("cuda"):
             with model.ema_scope():
-                all_samples = list()
-                for frame_number, video_frame in enumerate(vid.iter_frames()):
-                    
-                    # skip some (intro?) frames
-                    if frame_number < opt.skip_frame:
-                        continue
+                uc = None
+                if opt.scale != 1.0:
+                    uc = model.get_learned_conditioning([""])
 
-                    uc = None
-                    if opt.scale != 1.0:
-                        uc = model.get_learned_conditioning([""])
+                c = model.get_learned_conditioning(prompt_data)
 
-                    c = model.get_learned_conditioning(prompt_data)
+                def apply_to_frames(video_frame):
+                    with precision_scope("cuda"):
+                        with model.ema_scope():
 
-                    init_image = convert_frame_image(video_frame).to(device).half()
-                    init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image)) 
+                            init_image = convert_frame_image(video_frame).to(device).half()
+                            init_latent = model.get_first_stage_encoding(model.encode_first_stage(init_image)) 
 
-                    if opt.random_each_frame:
-                        latent_noise = torch.randn_like(init_latent)
+                            if opt.random_each_frame:
+                                latent_noise = torch.randn_like(init_latent)
 
-                    if opt.generate_random_from_image:
-                        latent_noise = find_noise.find_noise_for_image(model, init_image, prompt_data, steps=3, cond_scale=1.0, convert_image=False)
-                        # latent_noise = (latent_noise - latent_noise.mean()) / latent_noise.std()
+                            if opt.generate_random_from_image:
+                                latent_noise = find_noise.find_noise_for_image(model, init_image, prompt_data, steps=3, cond_scale=1.0, convert_image=False)
+                                latent_noise = (latent_noise - latent_noise.mean()) / latent_noise.std()
 
-                    # encode (scaled latent)
-                    z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc]).to(device), noise=latent_noise)
+                            # encode (scaled latent)
+                            z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc]).to(device), noise=latent_noise)
 
-                    # decode it
-                    sample = sampler.decode(z_enc, 
-                                             c, 
-                                             t_enc, 
-                                             unconditional_guidance_scale=opt.scale,
-                                             unconditional_conditioning=uc,
-                                             repeat_noise=False)
+                            # decode it
+                            sample = sampler.decode(z_enc, 
+                                                    c, 
+                                                    t_enc, 
+                                                    unconditional_guidance_scale=opt.scale,
+                                                    unconditional_conditioning=uc,
+                                                    repeat_noise=False)
 
-                    x_sample = model.decode_first_stage(sample)
-                    save_image_tensor(x_sample, opt.output_dir, frame_number) 
+                            x_sample = model.decode_first_stage(sample)
+                            numpy_image = tensor_to_numpy_image(x_sample)
+                            resized_image = resize_image(numpy_image, to_width=video_frame.shape[1], to_height=video_frame.shape[0])
+                    return resized_image
 
+                new_clip = vid.fl_image(apply_to_frames)
 
-    print(f"Your samples are ready and waiting for you here: \n{os.path.dirname(opt.outfile)} \nEnjoy.")
+    new_clip.write_videofile(os.path.join(opt.output_dir, 'output.mp4'))
 
 
 if __name__ == "__main__":
